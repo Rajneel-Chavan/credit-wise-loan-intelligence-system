@@ -32,33 +32,56 @@ st.title("Credit Wise: Advanced Loan Intelligence System")
 st.markdown("---")
 
 # =================================================================
-# 2. AUTO-UPDATE LOGIC (1000 PREDICTIONS THRESHOLD)
+# 2. AUTO-UPDATE & DATA LOADING LOGIC (NEW MERGED VERSION)
 # =================================================================
-# Every time the app loads, it checks if history has reached 1000 rows.
-# If it has, it deletes the model assets to trigger a full retrain.
 RETRAIN_THRESHOLD = 1000
 
+# 1. Improved Retraining: Clear both model AND history when threshold is hit
 if os.path.exists(HISTORY_PATH):
     try:
         current_history = pd.read_csv(HISTORY_PATH)
         if len(current_history) >= RETRAIN_THRESHOLD:
             if os.path.exists(MODEL_PATH):
                 os.remove(MODEL_PATH)
-                logger.info(f"Retrain threshold {RETRAIN_THRESHOLD} reached. Model purged for update.")
+            if os.path.exists(HISTORY_PATH):
+                os.remove(HISTORY_PATH)
+            logger.info(f"Retrain threshold {RETRAIN_THRESHOLD} reached. System wiped for fresh training.")
     except Exception as e:
         logger.warning(f"Auto-update check bypassed: {e}")
 
-# =================================================================
-# 3. DATA LOADING & PREPROCESSING (DETAILED)
-# =================================================================
+# 2. Load the base dataset
 if not os.path.exists(DATA_PATH):
-    st.error("Error: 'loan_approval_data.csv' not found!")
+    st.error(f"Error: '{DATA_PATH}' not found!")
     st.stop()
 
-# Load raw data
 raw_df = pd.read_csv(DATA_PATH)
 
-# Handling Missing Values Manually
+# 3. NEW: Merge History Data into training set
+if os.path.exists(HISTORY_PATH):
+    try:
+        history_df = pd.read_csv(HISTORY_PATH)
+        if not history_df.empty:
+            # Clean history: Map strings back to 1/0
+            if "Loan_Approved" in history_df.columns:
+                history_df["Loan_Approved"] = history_df["Loan_Approved"].map({"Approved": 1, "Rejected": 0})
+            
+            # Clean history: Drop Timestamp column
+            if "Timestamp" in history_df.columns:
+                history_df = history_df.drop(columns=["Timestamp"])
+            
+            # Align: Match columns to raw_df (fills missing with 0)
+            history_df = history_df.reindex(columns=raw_df.columns, fill_value=0)
+            
+            # Combine: Append history to the training data
+            raw_df = pd.concat([raw_df, history_df], axis=0, ignore_index=True)
+            logger.info(f"Successfully merged {len(history_df)} records from history.")
+    except Exception as e:
+        logger.warning(f"History merge skipped: {e}")
+
+# =================================================================
+# 3. PREPROCESSING PIPELINE
+# =================================================================
+# Handling Missing Values
 categorical_features = raw_df.select_dtypes(include=["object"]).columns
 numerical_features = raw_df.select_dtypes(include=["float64", "int64"]).columns
 
@@ -76,8 +99,11 @@ if "Applicant_ID" in raw_df.columns:
 raw_df["Education_Level"] = raw_df["Education_Level"].map({"Graduate": 1, "Not Graduate": 0})
 
 # Encoding the Target Variable
-label_encoder = LabelEncoder()
-raw_df["Loan_Approved"] = label_encoder.fit_transform(raw_df["Loan_Approved"])
+# Comprehensive Mapping: Handles Yes/No, Approved/Rejected, and Strings/Numbers
+raw_df["Loan_Approved"] = raw_df["Loan_Approved"].replace({
+    "Approved": 1, "Yes": 1, "1": 1, 1: 1, 
+    "Rejected": 0, "No": 0, "0": 0, 0: 0
+}).astype(int)
 
 # One-Hot Encoding for Categorical Variables
 ohe_columns = ["Employment_Status", "Marital_Status", "Loan_Purpose", "Property_Area", "Gender", "Employer_Category"]
@@ -316,11 +342,20 @@ if app_mode == "Loan Prediction Engine":
             plot_data.plot(kind='barh', color=colors, ax=ax_f)
             st.pyplot(fig_f)
 
-            # 7. Persistence
+            # 7. Persistence (Saving the result)
             log_entry = user_input.copy()
+            
+            # Save as "Approved"/"Rejected" so our mapping at the top can read it
             log_entry["Loan_Approved"] = "Approved" if decision == 1 else "Rejected"
+            
+            # Add Timestamp for tracking
             log_entry["Timestamp"] = datetime.now()
+            
+            # Append to history.csv
             log_entry.to_csv(HISTORY_PATH, mode='a', header=not os.path.exists(HISTORY_PATH), index=False)
+            
+            # Confirmation message for the user
+            st.info("Prediction logged! This data will be used to retrain the AI once 1,000 records are reached.")
 
 st.markdown("---")
 st.caption(f"System Instance: {id(system_assets)} | Threshold: {RETRAIN_THRESHOLD} | Status: Online")
