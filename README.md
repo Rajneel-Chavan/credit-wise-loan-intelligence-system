@@ -1,52 +1,51 @@
 # Credit Wise Loan Intelligence System
 
-AI-powered loan approval system using machine learning, enhanced with explainable AI and an interactive dashboard for real-time decision support.
+AI-powered loan approval system built using machine learning with explainability, dynamic tracking, and an interactive dashboard.
 
 ---
 
 ## Overview
 
-This project is an end-to-end machine learning application that predicts loan approval based on applicant financial and personal details.
+This project is an end-to-end machine learning system designed to predict loan approval based on applicant financial and personal data. It goes beyond traditional models by integrating explainability, real-time-like tracking, and a self-improving retraining mechanism.
 
-Unlike traditional prediction systems, this project focuses on **interpretability and decision intelligence** by integrating SHAP-based explanations and clear reasoning behind each prediction.
-
-It simulates a real-world financial system where not only predictions matter, but also understanding *why* a decision was made.
+The system is deployed using Streamlit and provides an interactive interface for both predictions and insights.
 
 ---
 
-## Features
+## Key Features
 
-* Real-time loan approval prediction (Approved / Rejected)
-* Approval probability with risk categorization
-* Explainable AI using SHAP values
-* Visualization of feature impact on predictions
-* Decision-based storytelling (why approved or rejected)
-* Actionable feedback for improving approval chances
-* Interactive dashboard including:
+* Loan approval prediction (Approved / Rejected)
+* Multiple machine learning models:
 
-  * Loan distribution visualization
-  * Income analysis
-  * Confusion matrix
-  * ROC curve comparison
-* Clean and structured UI using Streamlit
+  * Logistic Regression (with hyperparameter tuning)
+  * Random Forest
+  * Gradient Boosting
+* Model evaluation using:
 
----
+  * Accuracy
+  * Precision
+  * Recall
+  * F1 Score
+  * ROC-AUC
+* SHAP-based explainability:
 
-## Machine Learning Models
+  * Feature impact visualization
+  * Human-readable decision reasoning
+* Interactive dashboard:
 
-The system uses multiple models for performance comparison:
+  * Approval distribution
+  * Income vs credit score analysis
+  * Model performance comparison
+  * Correlation heatmap
+* Prediction tracking system:
 
-* Logistic Regression (with hyperparameter tuning)
-* Random Forest
-* Gradient Boosting
+  * Stores user predictions in history
+  * Enables trend monitoring
+* Self-improving system:
 
-Evaluation metrics used:
-
-* Accuracy
-* Precision
-* Recall
-* F1 Score
-* ROC-AUC
+  * Automatically retrains model using historical prediction data
+  * Adapts to changing patterns over time
+* Clean and user-friendly interface built with Streamlit
 
 ---
 
@@ -59,20 +58,18 @@ Evaluation metrics used:
 * NumPy
 * Matplotlib
 * Seaborn
-* SHAP (Explainability)
+* SHAP
 
 ---
 
-## Machine Learning Workflow
+## System Workflow
 
-1. Data loading and preprocessing
-2. Handling missing values using SimpleImputer
-3. Encoding categorical variables using OneHotEncoder
-4. Feature scaling using StandardScaler
-5. Model training and hyperparameter tuning using GridSearchCV
-6. Model evaluation and comparison
-7. SHAP-based explainability integration
-8. Deployment using Streamlit
+1. Data preprocessing (handling missing values, encoding, scaling)
+2. Model training and evaluation
+3. Deployment using Streamlit
+4. User input and real-time prediction
+5. Prediction logging in history
+6. Periodic retraining using new data
 
 ---
 
@@ -93,12 +90,8 @@ https://credit-wise-loan-intelligence-system-ejiucqzy2xjwakxm9mmewu.streamlit.ap
 
 ---
 
-## Use Case
+## Note
 
-This project demonstrates how machine learning can be used in financial decision-making systems where transparency and explainability are critical. It highlights how predictions can be combined with reasoning to support better and more trustworthy decisions.
+This project demonstrates not only machine learning modeling but also system-level thinking, including explainability, monitoring, and model lifecycle handling.
 
 ---
-
-## Author
-
-Rajneel Deepak Chavan
