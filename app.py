@@ -95,11 +95,11 @@ best_model_name = results.loc[results["F1"].idxmax(), "Model"]
 
 menu = st.sidebar.radio("Navigation", ["Dashboard", "Prediction"])
 
-# ---------------- DASHBOARD ----------------
+#DASHBOARD:
 if menu == "Dashboard":
 
     st.subheader("Model Comparison")
-    st.dataframe(results.style.highlight_max(axis=0), use_container_width=True)
+    st.dataframe(results, use_container_width=True)
     st.markdown("---")
 
     best_f1_model = results.loc[results["F1"].idxmax(), "Model"]
@@ -123,17 +123,18 @@ if menu == "Dashboard":
 
     lcol1, lcol2 = st.columns(2)
     with lcol1:
-        fig1, ax1 = plt.subplots(figsize=(4, 3.5))
+        fig1, ax1 = plt.subplots(figsize=(8, 5))
         pie_data = df["Loan_Approved"].map({1: "Approved", 0: "Rejected"}).value_counts()
         pie_data.plot.pie(autopct="%1.1f%%", ax=ax1, colors=["blue", "orange"])
         ax1.set_ylabel("")
-        ax1.legend(title="Loan Status")
+        ax1.legend(title="Loan Status", bbox_to_anchor=(1.05, 1), loc='upper left')
         st.pyplot(fig1)
 
     with lcol2:
-        fig2, ax2 = plt.subplots(figsize=(4, 3.5))
+        fig2, ax2 = plt.subplots(figsize=(8, 5))
         sns.histplot(df["Applicant_Income"], bins=20, ax=ax2)
         ax2.set_title("Applicant Income")
+        ax2.set_ylabel("Number of Applicants")
         st.pyplot(fig2)
 
     st.markdown("---")
@@ -141,7 +142,7 @@ if menu == "Dashboard":
 
     pmcol1, pmcol2 = st.columns(2)
     with pmcol1:
-        fig5, ax5 = plt.subplots(figsize=(4, 3.5))
+        fig5, ax5 = plt.subplots(figsize=(8, 5))
         cm = confusion_matrix(y_test, log_model.predict(X_test_scaled))
         sns.heatmap(cm, annot=True, fmt='d', cmap='Blues', ax=ax5)
         ax5.set_xlabel("Predicted")
@@ -150,7 +151,7 @@ if menu == "Dashboard":
         st.pyplot(fig5)
 
     with pmcol2:
-        fig4, ax4 = plt.subplots(figsize=(4, 3.5))
+        fig4, ax4 = plt.subplots(figsize=(8, 5))
         for model, name in [(log_model, "Logistic Regression"), (rf_model, "Random Forest"), (gb_model, "Gradient Boosting")]:
             if hasattr(model, 'predict_proba'):
                 fpr, tpr, _ = roc_curve(y_test, model.predict_proba(X_test_scaled)[:, 1])
@@ -168,7 +169,8 @@ if menu == "Dashboard":
     sns.heatmap(df.corr(), cmap="coolwarm", ax=ax3)
     st.pyplot(fig3)
 
-# ---------------- PREDICTION ----------------
+#PREDICTION:
+
 if menu == "Prediction":
 
     st.subheader("Applicant Details")
@@ -193,21 +195,21 @@ if menu == "Prediction":
     col3, col4 = st.columns(2)
 
     with col3:
-        income = st.number_input("Applicant Income", 0)
+        income = st.number_input("Applicant Income (USD)", 0)
         credit_score = st.number_input("Credit Score", 0)
-        savings = st.number_input("Savings", 0)
+        savings = st.number_input("Savings (USD)", 0)
 
     with col4:
-        co_income = st.number_input("Coapplicant Income", 0)
+        co_income = st.number_input("Coapplicant Income (USD)", 0)
         dti = st.number_input("DTI Ratio", 0.0)
-        loan_amount = st.number_input("Loan Amount", 0)
+        loan_amount = st.number_input("Loan Amount (USD)", 0)
 
     age = st.number_input("Age", 18)
 
     st.markdown("---")
 
     show_debug = st.checkbox("Show debug details (input + model predictions)")
-    st.info("Fill applicant and financial details to predict loan approval")
+    st.info("Fill applicant and financial details (all income amounts in USD) to predict loan approval")
     st.markdown("---")
 
     if st.button("Predict Loan Status"):
