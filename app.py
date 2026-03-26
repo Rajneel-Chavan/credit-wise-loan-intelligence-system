@@ -28,7 +28,7 @@ DATA_PATH = "loan_approval_data.csv"
 HISTORY_PATH = "history.csv"
 MODEL_PATH = "model_assets.joblib"
 
-st.title("🏦 Credit Wise: Advanced Loan Intelligence System")
+st.title("Credit Wise: Advanced Loan Intelligence System")
 st.markdown("---")
 
 # =================================================================
@@ -107,7 +107,7 @@ if os.path.exists(MODEL_PATH):
     system_assets = joblib.load(MODEL_PATH)
     logger.info("Loaded pre-trained model assets.")
 else:
-    with st.spinner("Auto-Updating AI Models with latest data..."):
+    with st.spinner("🚀 Auto-Updating AI Models with latest data..."):
         # Model A: Logistic Regression with Hyperparameter Tuning
         log_reg = LogisticRegression(max_iter=2000)
         log_params = {'C': [0.1, 1, 10]}
@@ -191,20 +191,34 @@ if app_mode == "Executive Dashboard":
         st.pyplot(fig_scat)
 
     st.markdown("---")
-    st.subheader("🤖 Model Performance Audit")
-    tab_metrics, tab_roc = st.tabs(["Metric Benchmarks", "ROC Curve Analysis"])
+    st.subheader("Model Performance Audit")
+    
+    # 1. CHANGE THIS LINE: Add "Feature Correlation" to the list
+    tab_metrics, tab_corr, tab_roc = st.tabs(["Metric Benchmarks", "Feature Correlation", "ROC Curve Analysis"])
+
     with tab_metrics:
         st.table(system_assets["stats"].style.highlight_max(axis=0, color="#D4EDDA"))
+
+    # 2. ADD THIS ENTIRE BLOCK: This is the missing Heatmap
+    with tab_corr:
+        st.write("**Variable Relationship Heatmap**")
+        fig_corr, ax_corr = plt.subplots(figsize=(10, 5))
+        # Select first 10 columns to keep the heatmap clean and readable
+        numeric_df = system_assets["raw_data"].select_dtypes(include=[np.number])
+        sns.heatmap(numeric_df.corr(), annot=True, cmap="RdYlGn", fmt=".2f", ax=ax_corr)
+        st.pyplot(fig_corr)
+    
     with tab_roc:
         fig_roc, ax_roc = plt.subplots(figsize=(10, 5))
+        # Logistic Regression Curve
         fpr1, tpr1, _ = roc_curve(system_assets["y_test"], system_assets["log_model"].predict_proba(system_assets["X_test"])[:, 1])
         ax_roc.plot(fpr1, tpr1, label="Logistic Regression")
+        # Random Forest Curve
         fpr2, tpr2, _ = roc_curve(system_assets["y_test"], system_assets["rf_model"].predict_proba(system_assets["X_test"])[:, 1])
         ax_roc.plot(fpr2, tpr2, label="Random Forest")
         ax_roc.plot([0, 1], [0, 1], 'k--', alpha=0.5)
         ax_roc.legend()
         st.pyplot(fig_roc)
-
 # =================================================================
 # 7. PREDICTION ENGINE (STORY + GRAPH)
 # =================================================================
@@ -287,7 +301,7 @@ if app_mode == "Loan Prediction Engine":
             top_pos = impact_map.index[0].replace('_', ' ')
             top_neg = impact_map.index[-1].replace('_', ' ')
 
-            # 5. Narrative 
+            # 5. Narrative (Story)
             st.subheader("Decision Narrative")
             if decision == 1:
                 st.info(f"**Why you were approved:** The primary factor was your **{top_pos}**. This indicated low risk to the system.")
