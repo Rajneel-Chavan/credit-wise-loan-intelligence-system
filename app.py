@@ -1,8 +1,12 @@
 import streamlit as st
 import pandas as pd
+import numpy as np
 import seaborn as sns
 import matplotlib.pyplot as plt
 import logging
+import os
+import joblib
+from datetime import datetime
 from sklearn.model_selection import train_test_split, GridSearchCV
 from sklearn.impute import SimpleImputer
 from sklearn.preprocessing import OneHotEncoder, StandardScaler, LabelEncoder
@@ -10,278 +14,299 @@ from sklearn.linear_model import LogisticRegression
 from sklearn.ensemble import RandomForestClassifier, GradientBoostingClassifier
 from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score, roc_auc_score, roc_curve, confusion_matrix
 import shap
-import numpy as np
 
-# --- SETTINGS & LOGGING ---
+# =================================================================
+# 1. SYSTEM SETTINGS & LOGGING
+# =================================================================
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-st.set_page_config(page_title="Credit Wise", layout="wide")
+st.set_page_config(page_title="Credit Wise Loan Intelligence", layout="wide", page_icon="🏦")
 
-st.title("Credit Wise Loan Intelligence System")
+# Global File Paths
+DATA_PATH = "loan_approval_data.csv"
+HISTORY_PATH = "history.csv"
+MODEL_PATH = "model_assets.joblib"
 
-# --- DATA LOADING & PREPROCESSING ---
-@st.cache_data
-def load_and_preprocess_data():
-    df = pd.read_csv("loan_approval_data.csv")
-    logger.info("Data loaded successfully")
+st.title("🏦 Credit Wise: Advanced Loan Intelligence System")
+st.markdown("---")
 
-    categorical_col = df.select_dtypes(include=["object"]).columns
-    numerical_col = df.select_dtypes(include=["float64", "int64"]).columns
+# =================================================================
+# 2. AUTO-UPDATE LOGIC (1000 PREDICTIONS THRESHOLD)
+# =================================================================
+# Every time the app loads, it checks if history has reached 1000 rows.
+# If it has, it deletes the model assets to trigger a full retrain.
+RETRAIN_THRESHOLD = 1000
 
-    df[numerical_col] = SimpleImputer(strategy="mean").fit_transform(df[numerical_col])
-    df[categorical_col] = SimpleImputer(strategy="most_frequent").fit_transform(df[categorical_col])
+if os.path.exists(HISTORY_PATH):
+    try:
+        current_history = pd.read_csv(HISTORY_PATH)
+        if len(current_history) >= RETRAIN_THRESHOLD:
+            if os.path.exists(MODEL_PATH):
+                os.remove(MODEL_PATH)
+                logger.info(f"Retrain threshold {RETRAIN_THRESHOLD} reached. Model purged for update.")
+    except Exception as e:
+        logger.warning(f"Auto-update check bypassed: {e}")
 
-    if "Applicant_ID" in df.columns:
-        df = df.drop("Applicant_ID", axis=1)
+# =================================================================
+# 3. DATA LOADING & PREPROCESSING (DETAILED)
+# =================================================================
+if not os.path.exists(DATA_PATH):
+    st.error("Error: 'loan_approval_data.csv' not found!")
+    st.stop()
 
-    df["Education_Level"] = df["Education_Level"].map({"Graduate": 1, "Not Graduate": 0})
+# Load raw data
+raw_df = pd.read_csv(DATA_PATH)
 
-    le = LabelEncoder()
-    df["Loan_Approved"] = le.fit_transform(df["Loan_Approved"])
+# Handling Missing Values Manually
+categorical_features = raw_df.select_dtypes(include=["object"]).columns
+numerical_features = raw_df.select_dtypes(include=["float64", "int64"]).columns
 
-    cols = ["Employment_Status", "Marital_Status", "Loan_Purpose", "Property_Area", "Gender", "Employer_Category"]
+imputer_num = SimpleImputer(strategy="mean")
+raw_df[numerical_features] = imputer_num.fit_transform(raw_df[numerical_features])
 
-    ohe = OneHotEncoder(drop="first", sparse_output=False, handle_unknown="ignore")
-    encoded = ohe.fit_transform(df[cols])
-    encoded_df = pd.DataFrame(encoded, columns=ohe.get_feature_names_out(cols), index=df.index)
+imputer_cat = SimpleImputer(strategy="most_frequent")
+raw_df[categorical_features] = imputer_cat.fit_transform(raw_df[categorical_features])
 
-    df = pd.concat([df.drop(columns=cols), encoded_df], axis=1)
+# Drop non-essential ID columns
+if "Applicant_ID" in raw_df.columns:
+    raw_df = raw_df.drop("Applicant_ID", axis=1)
 
-    return df, le, ohe, cols
+# Manual Feature Engineering: Education Level
+raw_df["Education_Level"] = raw_df["Education_Level"].map({"Graduate": 1, "Not Graduate": 0})
 
-df, le, ohe, cols = load_and_preprocess_data()
+# Encoding the Target Variable
+label_encoder = LabelEncoder()
+raw_df["Loan_Approved"] = label_encoder.fit_transform(raw_df["Loan_Approved"])
 
-# --- ML PIPELINE ---
-X = df.drop(columns=["Loan_Approved"])
-y = df["Loan_Approved"]
+# One-Hot Encoding for Categorical Variables
+ohe_columns = ["Employment_Status", "Marital_Status", "Loan_Purpose", "Property_Area", "Gender", "Employer_Category"]
+ohe_processor = OneHotEncoder(drop="first", sparse_output=False, handle_unknown="ignore")
+encoded_array = ohe_processor.fit_transform(raw_df[ohe_columns])
+encoded_feature_names = ohe_processor.get_feature_names_out(ohe_columns)
+encoded_df = pd.DataFrame(encoded_array, columns=encoded_feature_names, index=raw_df.index)
 
-low_income_threshold = df["Applicant_Income"].quantile(0.25)
+# Combine and Create Final Training Set
+final_training_df = pd.concat([raw_df.drop(columns=ohe_columns), encoded_df], axis=1)
 
-X_train, X_test, y_train, y_test = train_test_split(
-    X, y, test_size=0.2, stratify=y, random_state=42
-)
+# =================================================================
+# 4. MACHINE LEARNING PIPELINE (GRIDSEARCH & ENSEMBLES)
+# =================================================================
+X = final_training_df.drop(columns=["Loan_Approved"])
+y = final_training_df["Loan_Approved"]
 
-scaler = StandardScaler()
-X_train_scaled = scaler.fit_transform(X_train)
-X_test_scaled = scaler.transform(X_test)
+X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, stratify=y, random_state=42)
 
-# Training Logistic Regression
-param_grid = {'C': [0.1, 1, 10], 'penalty': ['l2']}
-grid_search = GridSearchCV(LogisticRegression(max_iter=1000), param_grid, cv=5, scoring='f1')
-grid_search.fit(X_train_scaled, y_train)
-log_model = grid_search.best_estimator_
+# Scaling Features
+feature_scaler = StandardScaler()
+X_train_scaled = feature_scaler.fit_transform(X_train)
+X_test_scaled = feature_scaler.transform(X_test)
 
-# Training Ensemble Models
-rf_model = RandomForestClassifier(n_estimators=200, random_state=42)
-gb_model = GradientBoostingClassifier()
+# Check if model already exists, otherwise Train
+if os.path.exists(MODEL_PATH):
+    system_assets = joblib.load(MODEL_PATH)
+    logger.info("Loaded pre-trained model assets.")
+else:
+    with st.spinner("Auto-Updating AI Models with latest data..."):
+        # Model A: Logistic Regression with Hyperparameter Tuning
+        log_reg = LogisticRegression(max_iter=2000)
+        log_params = {'C': [0.1, 1, 10]}
+        grid_log = GridSearchCV(log_reg, log_params, cv=3).fit(X_train_scaled, y_train)
+        best_log = grid_log.best_estimator_
 
-log_model.fit(X_train_scaled, y_train)
-rf_model.fit(X_train_scaled, y_train)
-gb_model.fit(X_train_scaled, y_train)
+        # Model B: Random Forest Ensemble
+        rf_ensemble = RandomForestClassifier(n_estimators=200, max_depth=10, random_state=42)
+        rf_ensemble.fit(X_train_scaled, y_train)
 
-# --- CRITICAL: MODEL DICTIONARY ---
-model_dict = {
-    "Logistic Regression": log_model,
-    "Random Forest": rf_model,
-    "Gradient Boosting": gb_model
-}
+        # Model C: Gradient Boosting Machine
+        gb_machine = GradientBoostingClassifier(n_estimators=100, learning_rate=0.1)
+        gb_machine.fit(X_train_scaled, y_train)
 
-def evaluate(model, X_t):
-    pred = model.predict(X_t)
-    pred_proba = model.predict_proba(X_t)[:, 1] if hasattr(model, 'predict_proba') else None
-    roc_auc = round(roc_auc_score(y_test, pred_proba), 3) if pred_proba is not None else 'N/A'
-    return [
-        round(accuracy_score(y_test, pred), 3),
-        round(precision_score(y_test, pred), 3),
-        round(recall_score(y_test, pred), 3),
-        round(f1_score(y_test, pred), 3),
-        roc_auc
-    ]
+        # Evaluate and Prepare Results Table
+        def get_model_stats(m, name):
+            p = m.predict(X_test_scaled)
+            return [name, accuracy_score(y_test, p), f1_score(y_test, p), roc_auc_score(y_test, m.predict_proba(X_test_scaled)[:,1])]
 
-results = pd.DataFrame([
-    ["Logistic Regression"] + evaluate(log_model, X_test_scaled),
-    ["Random Forest"] + evaluate(rf_model, X_test_scaled),
-    ["Gradient Boosting"] + evaluate(gb_model, X_test_scaled)
-], columns=["Model", "Accuracy", "Precision", "Recall", "F1", "ROC-AUC"])
+        results_list = [
+            get_model_stats(best_log, "Logistic Regression"),
+            get_model_stats(rf_ensemble, "Random Forest"),
+            get_model_stats(gb_machine, "Gradient Boosting")
+        ]
+        comparison_df = pd.DataFrame(results_list, columns=["Model", "Accuracy", "F1 Score", "ROC-AUC"])
 
-best_model_name = results.loc[results["F1"].idxmax(), "Model"]
+        # Save all assets into Joblib
+        system_assets = {
+            "log_model": best_log,
+            "rf_model": rf_ensemble,
+            "gb_model": gb_machine,
+            "scaler": feature_scaler,
+            "ohe": ohe_processor,
+            "ohe_cols": ohe_columns,
+            "features": X.columns.tolist(),
+            "stats": comparison_df,
+            "raw_data": raw_df,
+            "X_test": X_test_scaled,
+            "y_test": y_test
+        }
+        joblib.dump(system_assets, MODEL_PATH)
 
-# --- SIDEBAR NAVIGATION ---
-menu = st.sidebar.radio("Navigation", ["Dashboard", "Prediction"])
+# =================================================================
+# 5. SIDEBAR NAVIGATION
+# =================================================================
+st.sidebar.title("Navigation Menu")
+app_mode = st.sidebar.radio("Go To Page:", ["Executive Dashboard", "Loan Prediction Engine"])
 
-# --- DASHBOARD PAGE ---
-if menu == "Dashboard":
-    st.header("📊 Executive Portfolio Overview")
-    st.markdown("Detailed analytics of the loan application landscape and model efficacy.")
+# =================================================================
+# 6. DASHBOARD PAGE
+# =================================================================
+if app_mode == "Executive Dashboard":
+    st.header("Executive Portfolio Analysis")
+    
+    # 4 Metric Cards
+    m1, m2, m3, m4 = st.columns(4)
+    avg_approval = system_assets["raw_data"]["Loan_Approved"].mean() * 100
+    avg_income = system_assets["raw_data"]["Applicant_Income"].mean()
+    total_apps = len(system_assets["raw_data"])
+    avg_credit = system_assets["raw_data"]["Credit_Score"].mean()
 
-    mcol1, mcol2, mcol3, mcol4 = st.columns(4)
-    approval_rate = df["Loan_Approved"].mean() * 100
-    avg_dti = df["DTI_Ratio"].mean()
-    high_value_applicants = len(df[df["Applicant_Income"] > df["Applicant_Income"].quantile(0.75)])
-    avg_credit = df["Credit_Score"].mean()
-
-    mcol1.metric("Approval Rate", f"{approval_rate:.1f}%", delta=f"{approval_rate - 50:.1f}% vs Target")
-    mcol2.metric("Portfolio Risk (Avg DTI)", f"{avg_dti:.2f}")
-    mcol3.metric("High-Value Leads", high_value_applicants)
-    mcol4.metric("Avg. Credit Score", f"{avg_credit:.0f}")
+    m1.metric("Approval Rate", f"{avg_approval:.1f}%")
+    m2.metric("Total Records", f"{total_apps}")
+    m3.metric("Avg Applicant Income", f"${avg_income:,.0f}")
+    m4.metric("Mean Credit Score", f"{avg_credit:.0f}")
 
     st.markdown("---")
-    st.subheader("📍 Applicant Profile Insights")
-    lcol1, lcol2 = st.columns([1, 1.2])
-
-    with lcol1:
-        st.write("**Approval Status Split**")
-        fig1, ax1 = plt.subplots(figsize=(6, 4))
-        colors = ["#ff4b4b", "#00cc96"]
-        pie_data = df["Loan_Approved"].value_counts().sort_index()
-        ax1.pie(pie_data, labels=["Rejected", "Approved"], autopct="%1.1f%%", startangle=140, colors=colors)
-        st.pyplot(fig1)
-
-    with lcol2:
-        st.write("**Income vs. Credit Score Correlation**")
-        fig2, ax2 = plt.subplots(figsize=(8, 5))
-        sns.scatterplot(data=df, x="Applicant_Income", y="Credit_Score", hue="Loan_Approved", palette={0: "#ff4b4b", 1: "#00cc96"}, alpha=0.6, ax=ax2)
-        st.pyplot(fig2)
+    col_v1, col_v2 = st.columns(2)
+    with col_v1:
+        st.subheader("Approval Distribution")
+        fig_pie, ax_pie = plt.subplots()
+        system_assets["raw_data"]["Loan_Approved"].value_counts().plot.pie(
+            autopct="%1.1f%%", colors=["#ff4b4b", "#00cc96"], labels=["Rejected", "Approved"], ax=ax_pie
+        )
+        st.pyplot(fig_pie)
+    with col_v2:
+        st.subheader("Income vs Credit Score Correlation")
+        fig_scat, ax_scat = plt.subplots()
+        sns.scatterplot(data=system_assets["raw_data"], x="Applicant_Income", y="Credit_Score", 
+                        hue="Loan_Approved", palette={0: "#ff4b4b", 1: "#00cc96"}, ax=ax_scat)
+        st.pyplot(fig_scat)
 
     st.markdown("---")
-    st.subheader("🤖 Model Intelligence & Technical Audit")
-    tab_metrics, tab_correlations, tab_curves = st.tabs(["Metric Table", "Feature Correlation", "ROC Curves"])
-
+    st.subheader("🤖 Model Performance Audit")
+    tab_metrics, tab_roc = st.tabs(["Metric Benchmarks", "ROC Curve Analysis"])
     with tab_metrics:
-        st.dataframe(results.style.highlight_max(axis=0, subset=['Accuracy', 'F1', 'ROC-AUC'], color='#D4EDDA'), use_container_width=True)
+        st.table(system_assets["stats"].style.highlight_max(axis=0, color="#D4EDDA"))
+    with tab_roc:
+        fig_roc, ax_roc = plt.subplots(figsize=(10, 5))
+        fpr1, tpr1, _ = roc_curve(system_assets["y_test"], system_assets["log_model"].predict_proba(system_assets["X_test"])[:, 1])
+        ax_roc.plot(fpr1, tpr1, label="Logistic Regression")
+        fpr2, tpr2, _ = roc_curve(system_assets["y_test"], system_assets["rf_model"].predict_proba(system_assets["X_test"])[:, 1])
+        ax_roc.plot(fpr2, tpr2, label="Random Forest")
+        ax_roc.plot([0, 1], [0, 1], 'k--', alpha=0.5)
+        ax_roc.legend()
+        st.pyplot(fig_roc)
 
-    with tab_correlations:
-        fig3, ax3 = plt.subplots(figsize=(10, 5))
-        sns.heatmap(df.iloc[:, :10].corr(), annot=True, cmap="RdYlGn", fmt=".2f", ax=ax3)
-        st.pyplot(fig3)
+# =================================================================
+# 7. PREDICTION ENGINE (STORY + GRAPH)
+# =================================================================
+if app_mode == "Loan Prediction Engine":
+    st.header("Individual Applicant Assessment")
+    
+    with st.form("loan_application_form"):
+        c1, c2, c3 = st.columns(3)
+        with c1:
+            gender = st.selectbox("Gender", ["Male", "Female"])
+            marital = st.selectbox("Marital Status", ["Single", "Married"])
+        with c2:
+            education = st.selectbox("Education Level", ["Graduate", "Not Graduate"])
+            employment = st.selectbox("Employment Status", ["Employed", "Unemployed", "Self-employed"])
+        with c3:
+            prop_area = st.selectbox("Property Area", ["Urban", "Semiurban", "Rural"])
+            loan_purpose = st.selectbox("Loan Purpose", ["Home", "Business", "Education", "Personal"])
 
-    with tab_curves:
-        fig4, ax4 = plt.subplots(figsize=(10, 5))
-        for model_name, model_obj in model_dict.items():
-            fpr, tpr, _ = roc_curve(y_test, model_obj.predict_proba(X_test_scaled)[:, 1])
-            ax4.plot(fpr, tpr, label=f"{model_name} (AUC: {roc_auc_score(y_test, model_obj.predict_proba(X_test_scaled)[:, 1]):.2f})")
-        ax4.plot([0, 1], [0, 1], 'k--', alpha=0.5)
-        ax4.legend()
-        st.pyplot(fig4)
+        st.markdown("---")
+        c4, c5, c6 = st.columns(3)
+        with c4:
+            income = st.number_input("Monthly Income (USD)", 0, 100000, 5000)
+            age = st.number_input("Applicant Age", 18, 100, 30)
+        with c5:
+            credit_score = st.number_input("Credit Score", 300, 850, 700)
+            loan_amt = st.number_input("Loan Amount (USD)", 0, 500000, 25000)
+        with c6:
+            dti = st.slider("DTI Ratio", 0.0, 1.0, 0.3)
+            savings = st.number_input("Current Savings", 0, 100000, 10000)
 
-# --- PREDICTION PAGE ---
-if menu == "Prediction":
-    st.subheader("Applicant Details")
-    col1, col2 = st.columns(2)
+        run_prediction = st.form_submit_button("🚀 Execute Risk Assessment")
 
-    with col1:
-        education = st.selectbox("Education", ["Graduate", "Not Graduate"])
-        employment = st.selectbox("Employment", ["Employed", "Unemployed", "Self-employed"])
-        marital = st.selectbox("Marital Status", ["Single", "Married"])
-        loan_purpose = st.selectbox("Loan Purpose", ["Home", "Car", "Education", "Business"])
+    if run_prediction:
+        with st.spinner("Analyzing your financial story..."):
+            # 1. Transform User Input
+            user_input = pd.DataFrame({
+                "Education_Level": [1 if education == "Graduate" else 0],
+                "Employment_Status": [employment], "Marital_Status": [marital],
+                "Loan_Purpose": [loan_purpose], "Property_Area": [prop_area],
+                "Gender": [gender], "Employer_Category": ["Private"],
+                "Applicant_Income": [income], "Coapplicant_Income": [0],
+                "Credit_Score": [credit_score], "DTI_Ratio": [dti],
+                "Savings": [savings], "Age": [age], "Loan_Amount": [loan_amt]
+            })
 
-    with col2:
-        property_area = st.selectbox("Property Area", ["Urban", "Semiurban", "Rural"])
-        gender = st.selectbox("Gender", ["Male", "Female"])
-        employer_cat = st.selectbox("Employer Category", ["Private", "Government", "Self-employed"])
+            ohe_encoded = system_assets["ohe"].transform(user_input[system_assets["ohe_cols"]])
+            ohe_df = pd.DataFrame(ohe_encoded, columns=system_assets["ohe"].get_feature_names_out(system_assets["ohe_cols"]))
+            final_user_input = pd.concat([user_input.drop(columns=system_assets["ohe_cols"]), ohe_df], axis=1)
+            final_user_input = final_user_input.reindex(columns=system_assets["features"], fill_value=0)
+            scaled_user_input = system_assets["scaler"].transform(final_user_input)
 
-    st.markdown("---")
-    st.subheader("Financial Details")
-    col3, col4 = st.columns(2)
+            # 2. Decision Logic
+            decision = system_assets["rf_model"].predict(scaled_user_input)[0]
+            confidence = system_assets["rf_model"].predict_proba(scaled_user_input)[0, 1]
 
-    with col3:
-        income = st.number_input("Applicant Income (USD)", 0)
-        credit_score = st.number_input("Credit Score", 0)
-        savings = st.number_input("Savings (USD)", 0)
+            # 3. Result Display
+            st.markdown("---")
+            res_col, conf_col = st.columns([2, 1])
+            with res_col:
+                if decision == 1:
+                    st.success("### STATUS: APPLICATION APPROVED")
+                    st.balloons()
+                else:
+                    st.error("### STATUS: APPLICATION DECLINED")
+            with conf_col:
+                st.metric("Approval Confidence", f"{confidence*100:.1f}%")
 
-    with col4:
-        co_income = st.number_input("Coapplicant Income (USD)", 0)
-        dti = st.number_input("DTI Ratio", 0.0)
-        loan_amount = st.number_input("Loan Amount (USD)", 0)
+            # 4. SHAP Logic (1D Fix)
+            explainer = shap.TreeExplainer(system_assets["rf_model"])
+            raw_shap_vals = explainer.shap_values(scaled_user_input)
+            
+            if isinstance(raw_shap_vals, list):
+                sv_final = np.array(raw_shap_vals[1]).flatten()
+            elif len(raw_shap_vals.shape) == 3:
+                sv_final = raw_shap_vals[0, :, 1].flatten()
+            else:
+                sv_final = raw_shap_vals[:, 1].flatten() if raw_shap_vals.shape[1] == 2 else raw_shap_vals.flatten()
 
-    age = st.number_input("Age", 18)
+            impact_map = pd.Series(sv_final, index=system_assets["features"]).sort_values(ascending=False)
+            top_pos = impact_map.index[0].replace('_', ' ')
+            top_neg = impact_map.index[-1].replace('_', ' ')
 
-    st.markdown("---")
-    show_debug = st.checkbox("Show debug details (input + model predictions)")
-    st.info("Fill applicant and financial details (all income amounts in USD) to predict loan approval")
-    st.markdown("---")
+            # 5. Narrative 
+            st.subheader("Decision Narrative")
+            if decision == 1:
+                st.info(f"**Why you were approved:** The primary factor was your **{top_pos}**. This indicated low risk to the system.")
+            else:
+                st.warning(f"**Why you were declined:** The system flagged your **{top_neg}** as the primary risk concern.")
 
-    if st.button("Predict Loan Status"):
-        errors = []
-        if income <= 0: errors.append("Applicant Income must be greater than 0")
-        if credit_score < 300 or credit_score > 850: errors.append("Credit Score must be between 300 and 850")
-        if age < 18: errors.append("Age must be at least 18")
-        if dti < 0 or dti > 1: errors.append("DTI Ratio must be between 0 and 1")
+            # 6. Graph
+            st.subheader("Feature Impact Analysis")
+            plot_data = pd.concat([impact_map.head(5), impact_map.tail(5)]).sort_values()
+            fig_f, ax_f = plt.subplots(figsize=(10, 6))
+            colors = ['#ff4b4b' if x < 0 else '#00cc96' for x in plot_data]
+            plot_data.plot(kind='barh', color=colors, ax=ax_f)
+            st.pyplot(fig_f)
 
-        if errors:
-            for error in errors: st.error(error)
-        else:
-            logger.info(f"Prediction requested with best model: {best_model_name}")
-            with st.spinner("Analyzing applicant profile..."):
-                input_df = pd.DataFrame({
-                    "Education_Level": [1 if education == "Graduate" else 0],
-                    "Employment_Status": [employment], "Marital_Status": [marital],
-                    "Loan_Purpose": [loan_purpose], "Property_Area": [property_area],
-                    "Gender": [gender], "Employer_Category": [employer_cat],
-                    "Applicant_Income": [income], "Coapplicant_Income": [co_income],
-                    "Credit_Score": [credit_score], "DTI_Ratio": [dti],
-                    "Savings": [savings], "Age": [age], "Loan_Amount": [loan_amount]
-                })
+            # 7. Persistence
+            log_entry = user_input.copy()
+            log_entry["Loan_Approved"] = "Approved" if decision == 1 else "Rejected"
+            log_entry["Timestamp"] = datetime.now()
+            log_entry.to_csv(HISTORY_PATH, mode='a', header=not os.path.exists(HISTORY_PATH), index=False)
 
-                encoded = ohe.transform(input_df[cols])
-                encoded_df = pd.DataFrame(encoded, columns=ohe.get_feature_names_out(cols))
-                input_df = pd.concat([input_df.drop(columns=cols), encoded_df], axis=1)
-                input_df = input_df.reindex(columns=X.columns, fill_value=0)
-                input_scaled = scaler.transform(input_df)
-
-                # Prediction Logic
-                selected_model = model_dict.get(best_model_name, log_model)
-                pred = selected_model.predict(input_scaled)[0]
-                prob = selected_model.predict_proba(input_scaled)[0, 1] if hasattr(selected_model, 'predict_proba') else 0.5
-
-                if show_debug:
-                    st.subheader("Debug details")
-                    st.dataframe(input_df)
-                    for n, m in model_dict.items():
-                        st.write(f"{n} prediction:", int(m.predict(input_scaled)[0]))
-
-                # --- NEW NARRATIVE OUTPUT SECTION ---
-                st.markdown("---")
-                st.header("Personalized Credit Assessment")
-
-                res_col1, res_col2 = st.columns([2, 1])
-                with res_col1:
-                    if pred == 1:
-                        st.success("### APPLICATION APPROVED")
-                        st.balloons()
-                    else:
-                        st.error("### APPLICATION DECLINED")
-                with res_col2:
-                    st.metric("Approval Confidence", f"{prob*100:.1f}%")
-
-                st.markdown("---")
-                with st.spinner("Analyzing decision factors..."):
-                    if "Logistic" in best_model_name:
-                        explainer = shap.LinearExplainer(log_model, X_train_scaled)
-                        shap_values = explainer.shap_values(input_scaled)[0]
-                    else:
-                        explainer = shap.TreeExplainer(selected_model)
-                        sv = explainer.shap_values(input_scaled)
-                        shap_values = sv[1][0] if isinstance(sv, list) else sv[0]
-
-                    impact_series = pd.Series(shap_values, index=X.columns).sort_values(ascending=False)
-                    top_pos = impact_series.index[0].replace('_', ' ')
-                    top_neg = impact_series.index[-1].replace('_', ' ')
-
-                    st.subheader("Decision Narrative")
-                    if pred == 1:
-                        st.write(f"Approval was primarily driven by your strong **{top_pos}**. This significantly outweighed other risks.")
-                    else:
-                        st.write(f"The decision to decline was heavily influenced by your **{top_neg}**.")
-                        st.warning(f"💡 **Actionable Advice:** Improving your {top_neg} could shift your probability significantly.")
-
-                with st.expander("View Detailed Mathematical Impact"):
-                    plot_data = pd.concat([impact_series.head(5), impact_series.tail(5)]).sort_values()
-                    fig_s, ax_s = plt.subplots(figsize=(10, 6))
-                    colors = ['#ff4b4b' if x < 0 else '#00cc96' for x in plot_data]
-                    plot_data.plot(kind='barh', color=colors, ax=ax_s)
-                    ax_s.set_yticklabels([l.get_text().replace('_', ' ') for l in ax_s.get_yticklabels()])
-                    st.pyplot(fig_s)
-
-                st.caption("Disclaimer: AI-generated analysis based on historical patterns.")
+st.markdown("---")
+st.caption(f"System Instance: {id(system_assets)} | Threshold: {RETRAIN_THRESHOLD} | Status: Online")
